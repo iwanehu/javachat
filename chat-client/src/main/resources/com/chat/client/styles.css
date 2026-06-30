@@ -1,0 +1,109 @@
+/* ==========================================================================
+   CONFIGURACIÓN GENERAL Y CONTENEDORES
+   ========================================================================== */
+.root {
+    -fx-background-color: #1a1b26; /* Fondo oscuro profundo */
+    -fx-font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+/* Estilo para las listas (Mensajes y Usuarios) */
+.list-view {
+    -fx-background-color: #1a1b26;
+    -fx-background-insets: 0;
+    -fx-padding: 10px;
+    -fx-border-color: #24283b;
+    -fx-border-width: 0 1px 0 0; /* Solo línea divisoria lateral */
+}
+
+/* Eliminar el fondo por defecto de las celdas */
+.list-cell {
+    -fx-background-color: transparent;
+    -fx-padding: 6px 12px;
+    -fx-text-fill: #c0caf5;
+}
+
+/* Quitar el color de selección por defecto que se ve azul feo */
+.list-cell:filled:selected, .list-cell:filled:hover {
+    -fx-background-color: #2f334d;
+    -fx-text-fill: #ffffff;
+}
+
+/* ==========================================================================
+   BURBUJAS DE TEXTO (LISTA DE MENSAJES)
+   ========================================================================== */
+/* Formato base para cada fila de mensaje */
+.message-bubble-row {
+    -fx-padding: 4px 0px;
+}
+
+/* La burbuja en sí */
+.chat-bubble {
+    -fx-padding: 8px 14px;
+    -fx-background-radius: 12px;
+}
+
+/* Mensajes enviados por el SISTEMA (Entradas/Salidas) */
+.bubble-sistema {
+    -fx-background-color: rgba(224, 175, 104, 0.15);
+    -fx-border-color: #e0af68;
+    -fx-border-radius: 8px;
+    -fx-background-radius: 8px;
+    -fx-border-width: 1px;
+    -fx-text-fill: #ffcb6b !important;
+}
+
+/* Mensajes normales del resto de usuarios */
+.bubble-usuario {
+    -fx-background-color: #24283b; /* Tono azul grisáceo oscuro */
+    -fx-text-fill: #c0caf5 !important; /* Fuerza contraste del texto claro */
+}
+
+/* Tus propios mensajes */
+.bubble-propio {
+    -fx-background-color: #3b4261; /* Un tono un poco más claro/vivo para diferenciarte */
+    -fx-text-fill: #ffffff !important; /* Fuerza contraste del texto blanco */
+}
+
+/* ==========================================================================
+   ENTRADA DE TEXTO Y BOTONES
+   ========================================================================== */
+.text-field {
+    -fx-background-color: #24283b;
+    -fx-background-radius: 8px;
+    -fx-border-color: #414868;
+    -fx-border-radius: 8px;
+    -fx-text-fill: #c0caf5;
+    -fx-padding: 10px;
+    -fx-prompt-text-fill: #565f89;
+}
+.text-field:focused {
+    -fx-border-color: #7aa2f7; /* Brillo azul al escribir */
+}
+
+.button {
+    -fx-background-color: #7aa2f7;
+    -fx-text-fill: #1a1b26;
+    -fx-font-weight: bold;
+    -fx-background-radius: 8px;
+    -fx-padding: 10px 20px;
+    -fx-cursor: hand;
+}
+.button:hover {
+    -fx-background-color: #89ddff;
+}
+.button:disabled {
+    -fx-background-color: #414868;
+    -fx-text-fill: #565f89;
+}
+
+/* ==========================================================================
+   BARRA DE SCROLL ESTILIZADA (OPCIONAL)
+   ========================================================================== */
+.scroll-bar:vertical {
+    -fx-background-color: transparent;
+    -fx-width: 8px;
+}
+.scroll-bar:vertical .thumb {
+    -fx-background-color: #414868;
+    -fx-background-radius: 4px;
+}
