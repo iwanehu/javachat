@@ -25,15 +25,17 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Autowired
     private ObjectMapper objectMapper; // Jackson para transformar el JSON crudo en objeto Java
 
-    // Lista de sesiones activas (
+    // Lista de sesiones activas
     private static final List<WebSocketSession> sesiones = new CopyOnWriteArrayList<>();
 
-    //  Mapa concurrente para rastrear el nombre de usuario de cada sesión activa
+    // Mapa concurrente para rastrear el nombre de usuario de cada sesión activa
     private static final Map<WebSocketSession, String> mapaUsuarios = new ConcurrentHashMap<>();
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        sesiones.add(session);
+        if (!sesiones.contains(session)) {
+            sesiones.add(session);
+        }
         System.out.println("Nueva sesión WebSocket conectada: " + session.getId());
     }
 
@@ -52,20 +54,34 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 nuevoMensaje.setDestinatario("TODOS");
             }
 
-            // 🟢 CORRECCIÓN 1: Interceptamos usando el remitente original del mensaje de unión
+            // Interceptamos usando el remitente original del mensaje de unión del SISTEMA
             if ("SISTEMA".equals(nuevoMensaje.getRemitente()) && nuevoMensaje.getContenido().contains("se ha unido al chat.")) {
-
-                // En lugar de hacer split del contenido, usamos el remitente real que envía el frontend
-                // Si el JSON del frontend tiene el nombre en un campo o en la frase, lo capturamos de forma segura:
                 String nombreUsuario = nuevoMensaje.getContenido().split(" ")[0].trim();
 
+                // Si este usuario ya tenía una sesión colgada vieja por el StrictMode de React, la cerramos y limpiamos
+                mapaUsuarios.entrySet().removeIf(entry -> {
+                    if (entry.getValue().equals(nombreUsuario) && !entry.getKey().getId().equals(session.getId())) {
+                        try {
+                            sesiones.remove(entry.getKey());
+                            if (entry.getKey().isOpen()) {
+                                entry.getKey().close();
+                            }
+                        } catch (Exception e) {
+                            // Sesión vieja ya cerrada
+                        }
+                        return true;
+                    }
+                    return false;
+                });
+
+                // Registramos la sesión limpia actual en memoria
                 mapaUsuarios.put(session, nombreUsuario);
                 System.out.println("Usuario registrado en memoria: " + nombreUsuario);
 
                 // Retransmitimos el aviso de unión a los chats
                 retransmitirMensaje(message);
 
-                // Forzamos el envío de la lista actualizada
+                // Forzamos el envío de la lista actualizada y limpia
                 enviarListaUsuariosActivos();
                 return;
             }
@@ -84,7 +100,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         sesiones.remove(session);
-        // 🟢 NUEVO: Si la sesión que se cierra tenía un usuario asignado, lo sacamos del mapa
         String usuarioSaliente = mapaUsuarios.remove(session);
         System.out.println("Sesión WebSocket cerrada: " + session.getId());
 
@@ -98,7 +113,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
                 retransmitirMensaje(new TextMessage(jsonSalida));
 
-                // 🔊 Actualizamos la lista de la barra lateral para todos los que quedan
+                // Actualizamos la lista de la barra lateral para todos los que quedan
                 enviarListaUsuariosActivos();
             } catch (Exception e) {
                 System.err.println("Error al gestionar salida de usuario: " + e.getMessage());
@@ -115,7 +130,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    //  Genera el JSON especial de control y lo distribuye
+    // Genera el JSON especial de control y lo distribuye
     private void enviarListaUsuariosActivos() throws Exception {
         Map<String, Object> payloadLista = new ConcurrentHashMap<>();
         payloadLista.put("type", "LISTA_USUARIOS");
@@ -124,7 +139,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         payloadLista.put("usuarios", mapaUsuarios.values().toArray(new String[0]));
 
         String jsonLista = objectMapper.writeValueAsString(payloadLista);
-        System.out.println("Enviando lista de usuarios: " + jsonLista); // 👈 Revisa tu terminal de Java para ver si esto se imprime
+        System.out.println("Enviando lista de usuarios: " + jsonLista);
 
         TextMessage textMessageLista = new TextMessage(jsonLista);
 
