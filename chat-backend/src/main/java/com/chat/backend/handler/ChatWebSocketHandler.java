@@ -43,10 +43,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         System.out.println("Mensaje recibido: " + payload);
 
         try {
-            // 1. Mapear el JSON crudo que manda la App al objeto Mensaje de MongoDB
             Mensaje nuevoMensaje = objectMapper.readValue(payload, Mensaje.class);
 
-            // 2. Si el mensaje no trae marca de tiempo o destinatario, se asignan por defecto
             if (nuevoMensaje.getTimeStamp() == null) {
                 nuevoMensaje.setTimeStamp(LocalDateTime.now());
             }
@@ -54,20 +52,25 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 nuevoMensaje.setDestinatario("TODOS");
             }
 
-            // Interceptamos si el mensaje viene del SISTEMA avisando una unión
+            // 🟢 CORRECCIÓN 1: Interceptamos usando el remitente original del mensaje de unión
             if ("SISTEMA".equals(nuevoMensaje.getRemitente()) && nuevoMensaje.getContenido().contains("se ha unido al chat.")) {
-                // Extraemos el nombre limpiamente (ej: "prueba5 se ha unido..." -> "prueba5")
-                String nombreUsuario = nuevoMensaje.getContenido().split(" ")[0];
-                mapaUsuarios.put(session, nombreUsuario);
 
-                // Retransmitimos el mensaje de unión a todos primero
+                // En lugar de hacer split del contenido, usamos el remitente real que envía el frontend
+                // Si el JSON del frontend tiene el nombre en un campo o en la frase, lo capturamos de forma segura:
+                String nombreUsuario = nuevoMensaje.getContenido().split(" ")[0].trim();
+
+                mapaUsuarios.put(session, nombreUsuario);
+                System.out.println("Usuario registrado en memoria: " + nombreUsuario);
+
+                // Retransmitimos el aviso de unión a los chats
                 retransmitirMensaje(message);
-                //Enviamos la lista de usuarios actualizada a todo el mundo
+
+                // Forzamos el envío de la lista actualizada
                 enviarListaUsuariosActivos();
                 return;
             }
 
-            // 3. 💾 GUARDAR EN MONGODB (Solo mensajes legítimos, no payloads de estado)
+            // Guardar en MongoDB mensajes normales
             mensajeRepository.save(nuevoMensaje);
             System.out.println("Mensaje persistido en MongoDB con ID: " + nuevoMensaje.getId());
 
@@ -75,7 +78,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             System.err.println("Error al parsear o persistir el mensaje: " + e.getMessage());
         }
 
-        // 4. Retransmitir el mensaje recibido a todos los conectados
         retransmitirMensaje(message);
     }
 
@@ -113,13 +115,17 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    // 🟢 NUEVO: Genera el JSON especial de control y lo distribuye
+    //  Genera el JSON especial de control y lo distribuye
     private void enviarListaUsuariosActivos() throws Exception {
         Map<String, Object> payloadLista = new ConcurrentHashMap<>();
         payloadLista.put("type", "LISTA_USUARIOS");
-        payloadLista.put("usuarios", mapaUsuarios.values()); // Colección con ["prueba5", "prueba6"]
+
+        // Convertimos los valores a un array nativo para evitar problemas de serialización con Jackson
+        payloadLista.put("usuarios", mapaUsuarios.values().toArray(new String[0]));
 
         String jsonLista = objectMapper.writeValueAsString(payloadLista);
+        System.out.println("Enviando lista de usuarios: " + jsonLista); // 👈 Revisa tu terminal de Java para ver si esto se imprime
+
         TextMessage textMessageLista = new TextMessage(jsonLista);
 
         for (WebSocketSession s : sesiones) {
