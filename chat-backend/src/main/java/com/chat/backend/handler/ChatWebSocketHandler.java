@@ -23,9 +23,9 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     private MensajeRepository mensajeRepository;
 
     @Autowired
-    private ObjectMapper objectMapper; // Jackson para transformar el JSON crudo en objeto Java
+    private ObjectMapper objectMapper;
 
-    // Lista de sesiones activas
+    // Lista de sesiones activas globales
     private static final List<WebSocketSession> sesiones = new CopyOnWriteArrayList<>();
 
     // Mapa concurrente para rastrear el nombre de usuario de cada sesión activa
@@ -54,34 +54,30 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 nuevoMensaje.setDestinatario("TODOS");
             }
 
-            // Interceptamos usando el remitente original del mensaje de unión del SISTEMA
+            // Interceptamos el mensaje de unión del SISTEMA
             if ("SISTEMA".equals(nuevoMensaje.getRemitente()) && nuevoMensaje.getContenido().contains("se ha unido al chat.")) {
                 String nombreUsuario = nuevoMensaje.getContenido().split(" ")[0].trim();
 
-                // Si este usuario ya tenía una sesión colgada vieja por el StrictMode de React, la cerramos y limpiamos
-                mapaUsuarios.entrySet().removeIf(entry -> {
+                // Eliminamos sesiones colgadas previas del mismo usuario de AMBAS listas
+                for (Map.Entry<WebSocketSession, String> entry : mapaUsuarios.entrySet()) {
                     if (entry.getValue().equals(nombreUsuario) && !entry.getKey().getId().equals(session.getId())) {
-                        try {
-                            sesiones.remove(entry.getKey());
-                            if (entry.getKey().isOpen()) {
-                                entry.getKey().close();
-                            }
-                        } catch (Exception e) {
-                            // Sesión vieja ya cerrada
+                        WebSocketSession sesionVieja = entry.getKey();
+                        sesiones.remove(sesionVieja); // Lo sacamos del bucle de envíos global
+                        mapaUsuarios.remove(sesionVieja); // Lo sacamos del mapa
+                        if (sesionVieja.isOpen()) {
+                            try { sesionVieja.close(); } catch (Exception e) {}
                         }
-                        return true;
                     }
-                    return false;
-                });
+                }
 
-                // Registramos la sesión limpia actual en memoria
+                // Registramos la sesión limpia actual
                 mapaUsuarios.put(session, nombreUsuario);
                 System.out.println("Usuario registrado en memoria: " + nombreUsuario);
 
                 // Retransmitimos el aviso de unión a los chats
                 retransmitirMensaje(message);
 
-                // Forzamos el envío de la lista actualizada y limpia
+                // Enviamos la lista actualizada
                 enviarListaUsuariosActivos();
                 return;
             }
@@ -105,15 +101,12 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
         if (usuarioSaliente != null) {
             try {
-                // Creamos un mensaje simulado del sistema para notificar la salida en el feed
                 Map<String, String> avisoSalida = new ConcurrentHashMap<>();
                 avisoSalida.put("remitente", "SISTEMA");
                 avisoSalida.put("contenido", usuarioSaliente + " ha salido del chat.");
                 String jsonSalida = objectMapper.writeValueAsString(avisoSalida);
 
                 retransmitirMensaje(new TextMessage(jsonSalida));
-
-                // Actualizamos la lista de la barra lateral para todos los que quedan
                 enviarListaUsuariosActivos();
             } catch (Exception e) {
                 System.err.println("Error al gestionar salida de usuario: " + e.getMessage());
@@ -121,7 +114,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    // Auxiliar para evitar duplicar el bucle for de retransmisión
     private void retransmitirMensaje(TextMessage message) throws Exception {
         for (WebSocketSession s : sesiones) {
             if (s.isOpen()) {
@@ -130,17 +122,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    // Genera el JSON especial de control y lo distribuye
     private void enviarListaUsuariosActivos() throws Exception {
         Map<String, Object> payloadLista = new ConcurrentHashMap<>();
         payloadLista.put("type", "LISTA_USUARIOS");
 
-        // Convertimos los valores a un array nativo para evitar problemas de serialización con Jackson
-        payloadLista.put("usuarios", mapaUsuarios.values().toArray(new String[0]));
+        // Obtenemos solo los nombres únicos por seguridad antes de convertir a array
+        String[] usuariosUnicos = mapaUsuarios.values().stream().distinct().toArray(String[]::new);
+        payloadLista.put("usuarios", usuariosUnicos);
 
         String jsonLista = objectMapper.writeValueAsString(payloadLista);
-        System.out.println("Enviando lista de usuarios: " + jsonLista);
-
         TextMessage textMessageLista = new TextMessage(jsonLista);
 
         for (WebSocketSession s : sesiones) {
