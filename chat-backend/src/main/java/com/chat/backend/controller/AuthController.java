@@ -20,12 +20,23 @@ public class AuthController {
 
 
     @PostMapping("/registro")
-    public ResponseEntity<String> registrar(@RequestBody Usuario usuario){
-        if(usuarioRepository.findByUsername(usuario.getUsername()).isPresent()){
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("El ussuario ya existe");
+    public ResponseEntity<String> registrar(@RequestBody Usuario usuario) {
+        // 1. Verificar si el usuario ya existe
+        if (usuarioRepository.findByUsername(usuario.getUsername()).isPresent()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("El usuario ya existe.");
         }
+
+        String password = usuario.getPassword();
+
+        // 2. Validación: Mínimo 8 caracteres (Acepta espacios y caracteres especiales de forma nativa)
+        if (password == null || password.length() < 8) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body("La contraseña debe tener un mínimo de 8 caracteres.");
+        }
+
+        // Guardamos directamente si cumple con la longitud
         usuarioRepository.save(usuario);
-        return ResponseEntity.ok("usuario registrado correctamente");
+        return ResponseEntity.ok("Usuario registrado correctamente.");
     }
 
     @PostMapping("/login")
