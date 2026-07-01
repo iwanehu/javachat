@@ -37,3 +37,26 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+
+### 🔒 ARCHIVOS CON CREDENCIALES ###
+.env
+.env.*
+*.env
+**/application-dev.properties
+**/application-local.properties
+**/application-secret.properties
+
+### Logs ###
+*.log
+historial.log
+logs/
+
+### MongoDB ###
+dump/
+*.bson
+*.json
+
+### Docker ###
+*.pid
+*.lock
