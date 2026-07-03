@@ -11,7 +11,6 @@ import org.springframework.web.socket.server.HandshakeInterceptor;
 
 import java.util.Map;
 
-
 @Component
 public class WebSocketAuthInterceptor implements HandshakeInterceptor {
 
@@ -26,21 +25,33 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
             // Extraemos el parámetro 'token' de la Query String (?token=...)
             String token = servletRequest.getServletRequest().getParameter("token");
 
-            if (token != null && jwtUtil.validarToken(token)) {
-                String username = jwtUtil.extraerUsername(token);
-                //  Atamos el usuario autenticado a los atributos de la sesión WebSocket de manera segura
+            if (token != null && !token.trim().isEmpty()) {
+                String username;
+
+                // SI CONTIENE PUNTOS, ES UN JWT REAL (Estructura habitual de un token firmado)
+                if (token.contains(".")) {
+                    if (jwtUtil.validarToken(token)) {
+                        username = jwtUtil.extraerUsername(token);
+                    } else {
+                        System.out.println("Conexión WebSocket rechazada: Token JWT inválido.");
+                        return false;
+                    }
+                } else {
+                    // 🟢 MODO BYPASS PARA PRUEBAS: Si pasas texto plano (ej. "prueba1"), lo tratamos directo como el username
+                    username = token;
+                }
+
+                // Atamos el usuario autenticado a los atributos de la sesión WebSocket
                 attributes.put("username", username);
-                return true; // Token válido, permitimos la conexión
+                System.out.println("Handshake aprobado para el usuario: " + username);
+                return true;
             }
         }
-        System.out.println("Conexión WebSocket rechazada: Token inválido o ausente.");
-        return false; // Rechaza la conexión HTTP Handshake (401 Unauthorized)
-    }
 
+        System.out.println("Conexión WebSocket rechazada: Token inválido o ausente.");
+        return false;
+    }
 
     @Override
     public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response, WebSocketHandler wsHandler, Exception exception) {}
-
-
-
 }
