@@ -21,39 +21,38 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
     @Override
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                    WebSocketHandler wsHandler, Map<String, Object> attributes) throws Exception {
+        try {
+            String query = request.getURI().getQuery();
+            String token = null;
 
-        // Extraemos los parámetros directamente de la Query de la URI de forma nativa e infalible
-        String query = request.getURI().getQuery();
-        String token = null;
-
-        if (query != null && query.contains("token=")) {
-            token = query.split("token=")[1].split("&")[0];
-            token = URLDecoder.decode(token, StandardCharsets.UTF_8);
-        }
-
-        if (token != null && !token.trim().isEmpty()) {
-            String username;
-
-            // Si contiene puntos, validamos como JWT legítimo
-            if (token.contains(".")) {
-                if (jwtUtil.validarToken(token)) {
-                    username = jwtUtil.extraerUsername(token);
-                } else {
-                    System.out.println("Conexión WebSocket rechazada: Token JWT inválido.");
-                    return false;
-                }
-            } else {
-                // Modo bypass para pruebas locales o con alias planos (ej. prueba4)
-                username = token;
+            if (query != null && query.contains("token=")) {
+                token = query.split("token=")[1].split("&")[0];
+                token = URLDecoder.decode(token, StandardCharsets.UTF_8);
             }
 
-            // Inyectamos el username en los atributos de la sesión
-            attributes.put("username", username);
-            System.out.println("Handshake aprobado nativamente para el usuario: " + username);
-            return true;
+            if (token != null && !token.trim().isEmpty()) {
+                String username;
+
+                if (token.contains(".")) {
+                    if (jwtUtil.validarToken(token)) {
+                        username = jwtUtil.extraerUsername(token);
+                    } else {
+                        System.out.println("WS Rechazado: Token JWT inválido.");
+                        return false;
+                    }
+                } else {
+                    username = token;
+                }
+
+                attributes.put("username", username);
+                System.out.println("Handshake verificado para: " + username);
+                return true;
+            }
+        } catch (Exception e) {
+            System.err.println("Error procesando handshake: " + e.getMessage());
         }
 
-        System.out.println("Conexión WebSocket rechazada: Token ausente en la URI.");
+        System.out.println("WS Rechazado: Falta token.");
         return false;
     }
 
