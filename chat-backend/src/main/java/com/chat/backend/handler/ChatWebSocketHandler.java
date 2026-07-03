@@ -31,9 +31,10 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     // Mapa concurrente para rastrear el nombre de usuario de cada sesión activa
     private static final Map<WebSocketSession, String> mapaUsuarios = new ConcurrentHashMap<>();
 
+
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        // 🟢 Recuperamos el nombre de usuario inyectado de forma segura por el interceptor JWT
+        // 1. Recuperamos el nombre de usuario inyectado de forma segura por el interceptor JWT
         String nombreUsuario = (String) session.getAttributes().get("username");
 
         if (nombreUsuario == null) {
@@ -41,24 +42,23 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
-        // Eliminamos sesiones colgadas o previas del mismo usuario (mitigación estricta de duplicados)
-        for (Map.Entry<WebSocketSession, String> entry : mapaUsuarios.entrySet()) {
-            if (entry.getValue().equals(nombreUsuario)) {
-                WebSocketSession sesionVieja = entry.getKey();
+        //  LIMPIEZA SEGURA: Eliminamos sesiones previas del mismo usuario sin romper el hilo concurrente
+        mapaUsuarios.forEach((sesionVieja, usuario) -> {
+            if (usuario.equals(nombreUsuario)) {
                 sesiones.remove(sesionVieja);
-                mapaUsuarios.remove(sesionVieja);
                 if (sesionVieja.isOpen()) {
                     try { sesionVieja.close(); } catch (Exception e) {}
                 }
             }
-        }
+        });
+        mapaUsuarios.values().removeIf(usuario -> usuario.equals(nombreUsuario));
 
-        // Registramos la nueva sesión verificada
+        // 2. Registramos la nueva sesión verificada
         sesiones.add(session);
         mapaUsuarios.put(session, nombreUsuario);
         System.out.println("Sesión WebSocket autenticada conectada: " + nombreUsuario + " (" + session.getId() + ")");
 
-        // 🟢 El servidor genera autónomamente el mensaje de unión del sistema
+        // 3. El servidor genera autónomamente el mensaje de unión del sistema
         Map<String, String> avisoUnion = new ConcurrentHashMap<>();
         avisoUnion.put("remitente", "SISTEMA");
         avisoUnion.put("contenido", nombreUsuario + " se ha unido al chat.");
@@ -66,7 +66,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
         retransmitirMensaje(new TextMessage(jsonUnion));
 
-        // Enviamos la lista actualizada a todos
+        // 4. Enviamos la lista actualizada a todos de forma segura
         enviarListaUsuariosActivos();
     }
 
