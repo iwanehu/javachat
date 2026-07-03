@@ -31,24 +31,61 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     // Mapa concurrente para rastrear el nombre de usuario de cada sesión activa
     private static final Map<WebSocketSession, String> mapaUsuarios = new ConcurrentHashMap<>();
 
-    // Registro temporal de mensajes para evitar duplicaciones instantáneas por StrictMode
-    private static final Map<String, String> ultimoMensajePorSesion = new ConcurrentHashMap<>();
-
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        if (!sesiones.contains(session)) {
-            sesiones.add(session);
+        // 🟢 Recuperamos el nombre de usuario inyectado de forma segura por el interceptor JWT
+        String nombreUsuario = (String) session.getAttributes().get("username");
+
+        if (nombreUsuario == null) {
+            session.close(CloseStatus.NOT_ACCEPTABLE);
+            return;
         }
-        System.out.println("Nueva sesión WebSocket conectada: " + session.getId());
+
+        // Eliminamos sesiones colgadas o previas del mismo usuario (mitigación estricta de duplicados)
+        for (Map.Entry<WebSocketSession, String> entry : mapaUsuarios.entrySet()) {
+            if (entry.getValue().equals(nombreUsuario)) {
+                WebSocketSession sesionVieja = entry.getKey();
+                sesiones.remove(sesionVieja);
+                mapaUsuarios.remove(sesionVieja);
+                if (sesionVieja.isOpen()) {
+                    try { sesionVieja.close(); } catch (Exception e) {}
+                }
+            }
+        }
+
+        // Registramos la nueva sesión verificada
+        sesiones.add(session);
+        mapaUsuarios.put(session, nombreUsuario);
+        System.out.println("Sesión WebSocket autenticada conectada: " + nombreUsuario + " (" + session.getId() + ")");
+
+        // 🟢 El servidor genera autónomamente el mensaje de unión del sistema
+        Map<String, String> avisoUnion = new ConcurrentHashMap<>();
+        avisoUnion.put("remitente", "SISTEMA");
+        avisoUnion.put("contenido", nombreUsuario + " se ha unido al chat.");
+        String jsonUnion = objectMapper.writeValueAsString(avisoUnion);
+
+        retransmitirMensaje(new TextMessage(jsonUnion));
+
+        // Enviamos la lista actualizada a todos
+        enviarListaUsuariosActivos();
     }
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
         String payload = message.getPayload();
-        System.out.println("Mensaje recibido: " + payload);
+        // 🟢 Obtenemos el usuario real de la sesión (así evitamos que alteren el "remitente" desde la consola del navegador)
+        String usuarioAutenticado = mapaUsuarios.get(session);
+
+        if (usuarioAutenticado == null) {
+            System.err.println("Mensaje rechazado: Sesión no asociada a ningún usuario válido.");
+            return;
+        }
 
         try {
             Mensaje nuevoMensaje = objectMapper.readValue(payload, Mensaje.class);
+
+            // 🟢 Sobreescritura de seguridad con los datos reales del JWT
+            nuevoMensaje.setRemitente(usuarioAutenticado);
 
             if (nuevoMensaje.getTimeStamp() == null) {
                 nuevoMensaje.setTimeStamp(LocalDateTime.now());
@@ -57,64 +94,24 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 nuevoMensaje.setDestinatario("TODOS");
             }
 
-            // Interceptamos el mensaje de unión del SISTEMA
-            if ("SISTEMA".equals(nuevoMensaje.getRemitente()) && nuevoMensaje.getContenido().contains("se ha unido al chat.")) {
-                String contenidoActual = nuevoMensaje.getContenido();
-                String idSesion = session.getId();
-
-                // 🟢 FILTRO DE UNIÓN DUPLICADA: Si esta sesión idéntica ya mandó este aviso de unión, lo descartamos
-                if (contenidoActual.equals(ultimoMensajePorSesion.get(idSesion))) {
-                    System.out.println("Mensaje de unión repetido mitigado para la sesión: " + idSesion);
-                    return;
-                }
-
-                // Guardamos el contenido actual como el último enviado por este socket
-                ultimoMensajePorSesion.put(idSesion, contenidoActual);
-
-                String nombreUsuario = contenidoActual.split(" ")[0].trim();
-
-                // Eliminamos sesiones colgadas previas del mismo usuario de AMBAS listas
-                for (Map.Entry<WebSocketSession, String> entry : mapaUsuarios.entrySet()) {
-                    if (entry.getValue().equals(nombreUsuario) && !entry.getKey().getId().equals(session.getId())) {
-                        WebSocketSession sesionVieja = entry.getKey();
-                        sesiones.remove(sesionVieja);
-                        mapaUsuarios.remove(sesionVieja);
-                        ultimoMensajePorSesion.remove(sesionVieja.getId()); // Limpiamos su caché de mensajes
-                        if (sesionVieja.isOpen()) {
-                            try { sesionVieja.close(); } catch (Exception e) {}
-                        }
-                    }
-                }
-
-                // Registramos la sesión limpia actual
-                mapaUsuarios.put(session, nombreUsuario);
-                System.out.println("Usuario registrado en memoria: " + nombreUsuario);
-
-                // Retransmitimos el aviso de unión único a los chats
-                retransmitirMensaje(message);
-
-                // Enviamos la lista actualizada
-                enviarListaUsuariosActivos();
-                return;
-            }
-
-            // Guardar en MongoDB mensajes normales
+            // Guardar en MongoDB
             mensajeRepository.save(nuevoMensaje);
-            System.out.println("Mensaje persistido en MongoDB con ID: " + nuevoMensaje.getId());
+            System.out.println("Mensaje de " + usuarioAutenticado + " persistido en MongoDB.");
+
+            // Retransmitimos el mensaje sanitizado y verificado por el servidor
+            String jsonMensajeVerificado = objectMapper.writeValueAsString(nuevoMensaje);
+            retransmitirMensaje(new TextMessage(jsonMensajeVerificado));
 
         } catch (Exception e) {
             System.err.println("Error al parsear o persistir el mensaje: " + e.getMessage());
         }
-
-        retransmitirMensaje(message);
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         sesiones.remove(session);
         String usuarioSaliente = mapaUsuarios.remove(session);
-        ultimoMensajePorSesion.remove(session.getId()); // 🟢 Limpieza preventiva de su registro al cerrar
-        System.out.println("Sesión WebSocket cerrada: " + session.getId());
+        System.out.println("Sesión WebSocket cerrada: " + session.getId() + " perteneciente a: " + usuarioSaliente);
 
         if (usuarioSaliente != null) {
             try {
@@ -141,9 +138,10 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     private void enviarListaUsuariosActivos() throws Exception {
         Map<String, Object> payloadLista = new ConcurrentHashMap<>();
+        // Nota: Cambiado a LISTA_USUARIOS para mantener sincronía exacta con el frontend original
         payloadLista.put("type", "LISTA_USUARIOS");
 
-        // Obtenemos solo los nombres únicos por seguridad antes de convertir a array
+        // Obtenemos solo los nombres únicos por seguridad
         String[] usuariosUnicos = mapaUsuarios.values().stream().distinct().toArray(String[]::new);
         payloadLista.put("usuarios", usuariosUnicos);
 
