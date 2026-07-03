@@ -73,7 +73,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
         String payload = message.getPayload();
-        // 🟢 Obtenemos el usuario real de la sesión (así evitamos que alteren el "remitente" desde la consola del navegador)
         String usuarioAutenticado = mapaUsuarios.get(session);
 
         if (usuarioAutenticado == null) {
@@ -83,8 +82,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
         try {
             Mensaje nuevoMensaje = objectMapper.readValue(payload, Mensaje.class);
-
-            // 🟢 Sobreescritura de seguridad con los datos reales del JWT
             nuevoMensaje.setRemitente(usuarioAutenticado);
 
             if (nuevoMensaje.getTimeStamp() == null) {
@@ -94,16 +91,20 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 nuevoMensaje.setDestinatario("TODOS");
             }
 
-            // Guardar en MongoDB
-            mensajeRepository.save(nuevoMensaje);
-            System.out.println("Mensaje de " + usuarioAutenticado + " persistido en MongoDB.");
-
-            // Retransmitimos el mensaje sanitizado y verificado por el servidor
+            // PRIMERO RETRANSMITIMOS: Asegura que el chat responda al instante en la pantalla
             String jsonMensajeVerificado = objectMapper.writeValueAsString(nuevoMensaje);
             retransmitirMensaje(new TextMessage(jsonMensajeVerificado));
 
+            // DESPUÉS PERSISTIMOS: Si MongoDB falla o tarda, el mensaje ya se envió en caliente
+            try {
+                mensajeRepository.save(nuevoMensaje);
+                System.out.println("Mensaje de " + usuarioAutenticado + " persistido en MongoDB.");
+            } catch (Exception mongoEx) {
+                System.err.println("Error al guardar en MongoDB (pero el mensaje se distribuyó): " + mongoEx.getMessage());
+            }
+
         } catch (Exception e) {
-            System.err.println("Error al parsear o persistir el mensaje: " + e.getMessage());
+            System.err.println("Error al parsear el mensaje: " + e.getMessage());
         }
     }
 

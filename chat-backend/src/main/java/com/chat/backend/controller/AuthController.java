@@ -3,11 +3,14 @@ package com.chat.backend.controller;
 
 import com.chat.backend.model.Usuario;
 import com.chat.backend.repository.UsuarioRepository;
+import com.chat.backend.security.JwtUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 
 @RestController
@@ -17,6 +20,9 @@ public class AuthController {
 
     @Autowired
     private UsuarioRepository usuarioRepository;
+
+    @Autowired
+    private JwtUtil jwtUtil;
 
 
     @PostMapping("/registro")
@@ -39,14 +45,25 @@ public class AuthController {
         return ResponseEntity.ok("Usuario registrado correctamente.");
     }
 
+
+
+
     @PostMapping("/login")
-    public ResponseEntity<String> login(@RequestBody Usuario usuario){
+    public ResponseEntity<?> login(@RequestBody Usuario usuario){
         Optional<Usuario> userOpt = usuarioRepository.findByUsername(usuario.getUsername());
 
         if (userOpt.isPresent() && userOpt.get().getPassword().equals(usuario.getPassword())){
-            return ResponseEntity.ok("Login correcto");
+            //  Generamos el token legítimo firmado de 24h
+            String token = jwtUtil.generarToken(usuario.getUsername());
+
+            // Enviamos un JSON estructurado que el frontend procesará limpiamente
+            Map<String, String> respuesta = new HashMap<>();
+            respuesta.put("token", token);
+            respuesta.put("username", usuario.getUsername());
+
+            return ResponseEntity.ok(respuesta);
         }
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Credenciales invalidos");
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Credenciales inválidas");
     }
 
 }
