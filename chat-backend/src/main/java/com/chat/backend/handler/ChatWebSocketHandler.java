@@ -49,64 +49,60 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         String payload = message.getPayload();
 
         try {
+            // Leemos como árbol genérico para no depender de la estructura estricta de una clase
             JsonNode jsonNode = objectMapper.readTree(payload);
+
             String contenido = jsonNode.has("contenido") ? jsonNode.get("contenido").asText() : null;
             String remitente = jsonNode.has("remitente") ? jsonNode.get("remitente").asText() : null;
 
-            // --- PROTOCOLO CONNECT_INIT CON GENERACIÓN DE HASH ÚNICO ---
+            // --- PROTOCOLO CONNECT_INIT ---
             if ("CONNECT_INIT".equals(contenido) && remitente != null) {
                 String token = jsonNode.has("token") ? jsonNode.get("token").asText() : null;
 
                 if (token == null || token.isEmpty() || !jwtUtil.validarToken(token)) {
                     System.err.println("Token inválido en CONNECT_INIT.");
-                    session.close(CloseStatus.NOT_ACCEPTABLE);
+                    session.close(CloseStatus.NOT_ACCEPTABLE); // Cierre controlado 406
                     return;
                 }
 
-                // El token es válido. Ahora generamos un HASH ÚNICO e irrepetible para esta sesión
                 String emailUsuario = jwtUtil.extraerUsername(token).trim();
                 String hashSesionUnico = "usr_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
 
-                // Asignamos el Hash Único a la sesión en nuestro mapa interno
                 mapaUsuarios.put(session, hashSesionUnico);
-                System.out.println("Usuario [" + emailUsuario + "] autenticado. Hash asignado: " + hashSesionUnico);
+                System.out.println("Usuario [" + emailUsuario + "] autenticado. Hash: " + hashSesionUnico);
 
-                // 1. Enviamos una respuesta PRIVADA al usuario para notificarle su Hash Único asignado
+                // Confirmación al cliente
                 Map<String, Object> respuestaConfirmacion = new ConcurrentHashMap<>();
                 respuestaConfirmacion.put("type", "INIT_SUCCESS");
                 respuestaConfirmacion.put("hashSesion", hashSesionUnico);
                 session.sendMessage(new TextMessage(objectMapper.writeValueAsString(respuestaConfirmacion)));
 
-                // 2. Notificamos al resto del chat la llegada del nuevo usuario usando su Hash
+                // Notificación al resto
                 Map<String, String> avisoUnion = new ConcurrentHashMap<>();
                 avisoUnion.put("remitente", "SISTEMA");
                 avisoUnion.put("contenido", "Un usuario se ha unido al chat.");
                 retransmitirMensaje(new TextMessage(objectMapper.writeValueAsString(avisoUnion)));
 
-                // 3. Actualizamos la lista pública del chat (enviando solo los hashes anónimos)
                 enviarListaUsuariosActivos();
                 return;
             }
 
-            // --- FLUJO DE MENSAJES ORDINARIOS ---
+            // --- MENSAJES ORDINARIOS ---
             String hashRemitente = mapaUsuarios.get(session);
             if (hashRemitente == null || hashRemitente.startsWith("PENDIENTE_")) {
                 System.err.println("Mensaje bloqueado: Sesión no inicializada.");
                 return;
             }
 
-            Mensaje nuevoMensaje = objectMapper.readValue(payload, Mensaje.class);
-            // Forzamos a que el remitente del mensaje sea obligatoriamente su HASH ÚNICO verificado
+            // Para evitar que Jackson explote si el JSON trae el campo 'token' u otros extras,
+            // extraemos solo lo que necesitamos para construir el Mensaje de la BD
+            Mensaje nuevoMensaje = new Mensaje();
             nuevoMensaje.setRemitente(hashRemitente);
+            nuevoMensaje.setContenido(contenido);
+            nuevoMensaje.setTimeStamp(LocalDateTime.now());
 
-            if (nuevoMensaje.getTimeStamp() == null) {
-                nuevoMensaje.setTimeStamp(LocalDateTime.now());
-            }
-
-            // Transmitimos el mensaje firmado con el Hash a todos los clientes conectados
             retransmitirMensaje(new TextMessage(objectMapper.writeValueAsString(nuevoMensaje)));
 
-            // Persistencia en base de datos
             try {
                 mensajeRepository.save(nuevoMensaje);
             } catch (Exception mongoEx) {
@@ -114,7 +110,9 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             }
 
         } catch (Exception e) {
-            System.err.println("Error procesando mensaje: " + e.getMessage());
+            // Captura cualquier fallo de parseo para que NUNCA tire la conexión física
+            System.err.println("Error crítico procesando JSON: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
