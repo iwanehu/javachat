@@ -16,15 +16,17 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                    WebSocketHandler wsHandler, Map<String, Object> attributes) throws Exception {
 
-        // Render y Cloudflare a veces exigen que si el cliente envió un Sec-WebSocket-Protocol,
-        // este se devuelva intacto en la respuesta HTTP 101, si no el navegador aborta.
         List<String> protocols = request.getHeaders().get("Sec-WebSocket-Protocol");
+
         if (protocols != null && !protocols.isEmpty()) {
+            // Si el cliente envió protocolos, le devolvemos el primero para no romper el handshake
             response.getHeaders().set("Sec-WebSocket-Protocol", protocols.get(0));
+        } else {
+
+            response.getHeaders().set("Sec-WebSocket-Protocol", "text");
         }
 
-        // Devolvemos SIEMPRE true para delegar el control de identidad por completo
-        // al ChatWebSocketHandler mediante el mensaje inicial 'CONNECT_INIT'
+        System.out.println("-> Handshake autorizado hacia /ws. Cabeceras de protocolo alineadas.");
         return true;
     }
 
