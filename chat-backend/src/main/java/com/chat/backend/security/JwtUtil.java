@@ -14,6 +14,7 @@ import java.util.Date;
 public class JwtUtil {
 
 
+
     //clave segura de 256 bits para firmar los tokens
     private final Key SECRET_KEY = Keys.secretKeyFor(SignatureAlgorithm.HS256);
 

@@ -15,6 +15,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -25,13 +26,11 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     private final ObjectMapper objectMapper;
     private final JwtUtil jwtUtil;
 
-    // Lista de sesiones activas globales
     private static final List<WebSocketSession> sesiones = new CopyOnWriteArrayList<>();
 
-    // Mapa concurrente para rastrear el nombre de usuario de cada sesión activa
+    // Este mapa ahora vincula la sesión física con su HASH ÚNICO exclusivo
     private static final Map<WebSocketSession, String> mapaUsuarios = new ConcurrentHashMap<>();
 
-    // Única inyección robusta por constructor para evitar NullPointerExceptions
     @Autowired
     public ChatWebSocketHandler(MensajeRepository mensajeRepository, ObjectMapper objectMapper, JwtUtil jwtUtil) {
         this.mensajeRepository = mensajeRepository;
@@ -41,11 +40,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        // En Render las cabeceras se pierden, por lo que entramos de forma provisional
         sesiones.add(session);
-        // Le asignamos un nombre temporal hasta que envíe el evento CONNECT_INIT
         mapaUsuarios.put(session, "PENDIENTE_" + session.getId());
-        System.out.println("Canal TCP abierto provisionalmente para la sesión: " + session.getId());
     }
 
     @Override
@@ -53,128 +49,90 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         String payload = message.getPayload();
 
         try {
-            // Leemos como JsonNode para evitar problemas de casteo genérico con Map.class
             JsonNode jsonNode = objectMapper.readTree(payload);
             String contenido = jsonNode.has("contenido") ? jsonNode.get("contenido").asText() : null;
             String remitente = jsonNode.has("remitente") ? jsonNode.get("remitente").asText() : null;
 
-            // --- CASO ESPECIAL: Inicialización de Handshake en diferido con validación JWT ---
+            // --- PROTOCOLO CONNECT_INIT CON GENERACIÓN DE HASH ÚNICO ---
             if ("CONNECT_INIT".equals(contenido) && remitente != null) {
-                String sessionIdActual = session.getId();
-
-                System.out.println("Procesando CONNECT_INIT en diferido (Sesión: " + sessionIdActual + ")");
-                System.out.println("Payload crudo recibido: " + payload);
-
-                // Extraemos el token del JSON enviado por el ChatRoom de React
                 String token = jsonNode.has("token") ? jsonNode.get("token").asText() : null;
 
-                if (jwtUtil == null) {
-                    System.err.println("CRÍTICO: ¡jwtUtil sigue siendo NULL! Fallo de inyección en el framework.");
-                    session.close(CloseStatus.SERVER_ERROR);
-                    return;
-                }
-
-                // --- FILTRO DE SEGURIDAD JWT BLINDADO ---
                 if (token == null || token.isEmpty() || !jwtUtil.validarToken(token)) {
-                    System.err.println("¡ALERTA DE SEGURIDAD! Intento de conexión rechazado: Token ausente, vacío o inválido.");
-                    System.err.println("Valor del token inspeccionado: " + (token != null ? "Presente (Tam: " + token.length() + ")" : "null"));
-                    // Tumbamos la sesión tcp provisional por falta de credenciales legítimas
+                    System.err.println("Token inválido en CONNECT_INIT.");
                     session.close(CloseStatus.NOT_ACCEPTABLE);
                     return;
                 }
 
-                // Extraemos el identificador real directamente del JWT validado (evitamos conflictos alias vs email)
-                String nombreUsuario = jwtUtil.extraerUsername(token).trim();
-                System.out.println("Validación JWT exitosa. Registrando usuario oficial: " + nombreUsuario);
+                // El token es válido. Ahora generamos un HASH ÚNICO e irrepetible para esta sesión
+                String emailUsuario = jwtUtil.extraerUsername(token).trim();
+                String hashSesionUnico = "usr_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
 
-                // LIMPIEZA MUTEX: Cerramos SOLO sesiones antiguas reales de ese usuario, protegiendo la sesión actual
-                mapaUsuarios.entrySet().removeIf(entry -> {
-                    WebSocketSession sesionVieja = entry.getKey();
-                    String usuarioAsociado = entry.getValue();
+                // Asignamos el Hash Único a la sesión en nuestro mapa interno
+                mapaUsuarios.put(session, hashSesionUnico);
+                System.out.println("Usuario [" + emailUsuario + "] autenticado. Hash asignado: " + hashSesionUnico);
 
-                    // Si es el mismo nombre de usuario pero una conexión física DISTINTA, la purgamos
-                    if (usuarioAsociado.equals(nombreUsuario) && !sesionVieja.getId().equals(sessionIdActual)) {
-                        sesiones.remove(sesionVieja);
-                        if (sesionVieja.isOpen()) {
-                            try {
-                                sesionVieja.close(CloseStatus.SESSION_NOT_RELIABLE);
-                                System.out.println("-> Sesión antigua duplicada cerrada para el usuario: " + nombreUsuario);
-                            } catch (Exception e) {
-                                System.err.println("Error al cerrar sesión duplicada: " + e.getMessage());
-                            }
-                        }
-                        return true; // Elimina del mapaUsuarios de forma segura
-                    }
-                    return false;
-                });
+                // 1. Enviamos una respuesta PRIVADA al usuario para notificarle su Hash Único asignado
+                Map<String, Object> respuestaConfirmacion = new ConcurrentHashMap<>();
+                respuestaConfirmacion.put("type", "INIT_SUCCESS");
+                respuestaConfirmacion.put("hashSesion", hashSesionUnico);
+                session.sendMessage(new TextMessage(objectMapper.writeValueAsString(respuestaConfirmacion)));
 
-                // Registramos de forma segura al usuario actual con su nombre real verificado por JWT
-                mapaUsuarios.put(session, nombreUsuario);
-                System.out.println("Sesión WebSocket AUTENTICADA con JWT con éxito: " + nombreUsuario + " (" + sessionIdActual + ")");
-
-                // El servidor genera el aviso de unión global
+                // 2. Notificamos al resto del chat la llegada del nuevo usuario usando su Hash
                 Map<String, String> avisoUnion = new ConcurrentHashMap<>();
                 avisoUnion.put("remitente", "SISTEMA");
-                avisoUnion.put("contenido", nombreUsuario + " se ha unido al chat.");
-                String jsonUnion = objectMapper.writeValueAsString(avisoUnion);
+                avisoUnion.put("contenido", "Un usuario se ha unido al chat.");
+                retransmitirMensaje(new TextMessage(objectMapper.writeValueAsString(avisoUnion)));
 
-                retransmitirMensaje(new TextMessage(jsonUnion));
+                // 3. Actualizamos la lista pública del chat (enviando solo los hashes anónimos)
                 enviarListaUsuariosActivos();
-                return; // Cortamos la ejecución, mensaje de control procesado con éxito
+                return;
             }
 
-            // --- CASO NORMAL: Flujo ordinario de chat ---
-            String usuarioAutenticado = mapaUsuarios.get(session);
-            if (usuarioAutenticado == null || usuarioAutenticado.startsWith("PENDIENTE_")) {
-                System.err.println("Mensaje rechazado: La sesión no ha completado la autenticación JWT inicial.");
+            // --- FLUJO DE MENSAJES ORDINARIOS ---
+            String hashRemitente = mapaUsuarios.get(session);
+            if (hashRemitente == null || hashRemitente.startsWith("PENDIENTE_")) {
+                System.err.println("Mensaje bloqueado: Sesión no inicializada.");
                 return;
             }
 
             Mensaje nuevoMensaje = objectMapper.readValue(payload, Mensaje.class);
-            nuevoMensaje.setRemitente(usuarioAutenticado);
+            // Forzamos a que el remitente del mensaje sea obligatoriamente su HASH ÚNICO verificado
+            nuevoMensaje.setRemitente(hashRemitente);
 
             if (nuevoMensaje.getTimeStamp() == null) {
                 nuevoMensaje.setTimeStamp(LocalDateTime.now());
             }
-            if (nuevoMensaje.getDestinatario() == null) {
-                nuevoMensaje.setDestinatario("TODOS");
-            }
 
-            // RETRANSMISIÓN EN VIVO
-            String jsonMensajeVerificado = objectMapper.writeValueAsString(nuevoMensaje);
-            retransmitirMensaje(new TextMessage(jsonMensajeVerificado));
+            // Transmitimos el mensaje firmado con el Hash a todos los clientes conectados
+            retransmitirMensaje(new TextMessage(objectMapper.writeValueAsString(nuevoMensaje)));
 
-            // PERSISTENCIA ASÍNCRONA EN MONGODB
+            // Persistencia en base de datos
             try {
                 mensajeRepository.save(nuevoMensaje);
-                System.out.println("Mensaje de " + usuarioAutenticado + " persistido en MongoDB Atlas.");
             } catch (Exception mongoEx) {
-                System.err.println("Error al guardar en MongoDB (pero el mensaje se distribuyó): " + mongoEx.getMessage());
+                System.err.println("Error MongoDB: " + mongoEx.getMessage());
             }
 
         } catch (Exception e) {
-            System.err.println("Error al parsear el mensaje en el handler: " + e.getMessage());
+            System.err.println("Error procesando mensaje: " + e.getMessage());
         }
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         sesiones.remove(session);
-        String usuarioSaliente = mapaUsuarios.remove(session);
-        System.out.println("Sesión WebSocket cerrada: " + session.getId() + " perteneciente a: " + usuarioSaliente);
+        String hashSaliente = mapaUsuarios.remove(session);
 
-        // Solo notificamos la salida si el usuario llegó a completar el registro real
-        if (usuarioSaliente != null && !usuarioSaliente.startsWith("PENDIENTE_")) {
+        if (hashSaliente != null && !hashSaliente.startsWith("PENDIENTE_")) {
             try {
                 Map<String, String> avisoSalida = new ConcurrentHashMap<>();
                 avisoSalida.put("remitente", "SISTEMA");
-                avisoSalida.put("contenido", usuarioSaliente + " ha salido del chat.");
-                String jsonSalida = objectMapper.writeValueAsString(avisoSalida);
+                avisoSalida.put("contenido", "Un usuario ha abandonado el chat.");
 
-                retransmitirMensaje(new TextMessage(jsonSalida));
+                retransmitirMensaje(new TextMessage(objectMapper.writeValueAsString(avisoSalida)));
                 enviarListaUsuariosActivos();
             } catch (Exception e) {
-                System.err.println("Error al gestionar salida de usuario: " + e.getMessage());
+                System.err.println("Error en salida: " + e.getMessage());
             }
         }
     }
@@ -191,21 +149,12 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         Map<String, Object> payloadLista = new ConcurrentHashMap<>();
         payloadLista.put("type", "LISTA_USUARIOS");
 
-        // Obtenemos solo los nombres únicos, ignorando los temporales ("PENDIENTE_...")
-        String[] usuariosUnicos = mapaUsuarios.values().stream()
-                .filter(usuario -> !usuario.startsWith("PENDIENTE_"))
+        String[] listaHashes = mapaUsuarios.values().stream()
+                .filter(h -> !h.startsWith("PENDIENTE_"))
                 .distinct()
                 .toArray(String[]::new);
 
-        payloadLista.put("usuarios", usuariosUnicos);
-
-        String jsonLista = objectMapper.writeValueAsString(payloadLista);
-        TextMessage textMessageLista = new TextMessage(jsonLista);
-
-        for (WebSocketSession s : sesiones) {
-            if (s.isOpen()) {
-                s.sendMessage(textMessageLista);
-            }
-        }
+        payloadLista.put("usuarios", listaHashes);
+        retransmitirMensaje(new TextMessage(objectMapper.writeValueAsString(payloadLista)));
     }
 }
