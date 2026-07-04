@@ -4,11 +4,12 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct; // Asegura la ejecución post-inyección
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.security.Key;
-import java.util.Base64; // IMPORTANTE: Usaremos el decodificador nativo
+import java.util.Base64;
 import java.util.Date;
 
 @Component
@@ -17,22 +18,33 @@ public class JwtUtil {
     @Value("${jwt.secret:ClaveDeDesarrolloLocalParaEvitarErroresDeLongitudMinimaDeMasDeTreintaYDosCaracteres}")
     private String secretKeyString;
 
+    // La clave final calculada compartida de forma segura por todos los hilos
+    private Key cachedSigningKey;
+
     private final long EXPIRATION_TIME = 86400000; // 24 horas
 
-    private Key getSigningKey() {
+    @PostConstruct
+    public void init() {
+        String cleanedKey = this.secretKeyString.trim();
+        System.out.println("====== [JWT CONFIG] Inicializando clave del sistema. Longitud: " + cleanedKey.length() + " ======");
+
         try {
-            // Intentamos decodificarlo como Base64 real (lo correcto para producción y .env)
-            byte[] keyBytes = Base64.getDecoder().decode(this.secretKeyString.trim());
-            return Keys.hmacShaKeyFor(keyBytes);
+            // Intentamos decodificarlo como Base64 real (Entorno de producción)
+            byte[] keyBytes = Base64.getDecoder().decode(cleanedKey);
+            this.cachedSigningKey = Keys.hmacShaKeyFor(keyBytes);
+            System.out.println("[JWT CONFIG] Clave Base64 decodificada e instanciada con éxito.");
         } catch (IllegalArgumentException e) {
-            // Fallback defensivo: Si no es Base64 válido (como la clave larga de fallback en local),
-            // leemos los bytes planos en UTF-8 para que no rompa el inicio.
-            byte[] keyBytes = this.secretKeyString.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            return Keys.hmacShaKeyFor(keyBytes);
+            // Fallback defensivo para desarrollo local si la clave no está en Base64
+            System.out.println("[JWT WARN] La clave no es Base64 válida. Utilizando bytes UTF-8 planos.");
+            byte[] keyBytes = cleanedKey.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            this.cachedSigningKey = Keys.hmacShaKeyFor(keyBytes);
         }
     }
 
-    // Genera un token único usando los datos del usuario como semilla
+    private Key getSigningKey() {
+        return this.cachedSigningKey;
+    }
+
     public String generarToken(String username) {
         return Jwts.builder()
                 .setSubject(username)
@@ -48,14 +60,12 @@ public class JwtUtil {
 
     public boolean validarToken(String token) {
         try {
-            Claims claims = extraerClaims(token);
-            boolean noHaExpirado = claims.getExpiration().after(new Date());
-            if (!noHaExpirado) {
-                System.err.println("Validación JWT: El token ha expirado.");
-            }
-            return noHaExpirado;
+            // Aseguramos una limpieza básica si el token viene con espacios accidentales del JSON
+            String tokenLimpio = token.trim();
+            Claims claims = extraerClaims(tokenLimpio);
+            return claims.getExpiration().after(new Date());
         } catch (io.jsonwebtoken.security.SignatureException e) {
-            System.err.println("Validación JWT: La firma no coincide. Error de clave.");
+            System.err.println("Validación JWT: La firma no coincide con la clave compartida.");
             return false;
         } catch (Exception e) {
             System.err.println("Error validando JWT en WebSocket: " + e.getMessage());
