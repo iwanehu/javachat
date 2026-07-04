@@ -2,6 +2,7 @@ package com.chat.backend.handler;
 
 import com.chat.backend.model.Mensaje;
 import com.chat.backend.repository.MensajeRepository;
+import com.chat.backend.security.JwtUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +26,10 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    // Inyectamos el componente de seguridad para la validación en caliente
+    @Autowired
+    private JwtUtil jwtUtil;
 
     // Lista de sesiones activas globales
     private static final List<WebSocketSession> sesiones = new CopyOnWriteArrayList<>();
@@ -51,12 +56,23 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             String contenido = jsonNode.has("contenido") ? jsonNode.get("contenido").asText() : null;
             String remitente = jsonNode.has("remitente") ? jsonNode.get("remitente").asText() : null;
 
-            // --- CASO ESPECIAL: Inicialización de Handshake en diferido ---
+            // --- CASO ESPECIAL: Inicialización de Handshake en diferido con validación JWT ---
             if ("CONNECT_INIT".equals(contenido) && remitente != null) {
                 String nombreUsuario = remitente.trim();
                 String sessionIdActual = session.getId();
 
-                System.out.println("Procesando CONNECT_INIT para: " + nombreUsuario + " (Sesión: " + sessionIdActual + ")");
+                // Extraemos el token del JSON enviado por el ChatRoom de React
+                String token = jsonNode.has("token") ? jsonNode.get("token").asText() : null;
+
+                System.out.println("Validando CONNECT_INIT mediante JWT para: " + nombreUsuario + " (Sesión: " + sessionIdActual + ")");
+
+                // --- FILTRO DE SEGURIDAD JWT ---
+                if (token == null || token.isEmpty() || !jwtUtil.validarToken(token) || !nombreUsuario.equals(jwtUtil.extraerUsername(token))) {
+                    System.err.println("¡ALERTA DE SEGURIDAD! Intento de suplantación o token inválido para: " + nombreUsuario);
+                    // Tumbamos la sesión tcp provisional por falta de credenciales legítimas
+                    session.close(CloseStatus.NOT_ACCEPTABLE);
+                    return;
+                }
 
                 // LIMPIEZA MUTEX: Cerramos SOLO sesiones antiguas reales de ese usuario, protegiendo la sesión actual
                 mapaUsuarios.entrySet().removeIf(entry -> {
@@ -79,9 +95,9 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                     return false;
                 });
 
-                // Registramos de forma segura al usuario actual con su nombre real verificado
+                // Registramos de forma segura al usuario actual con su nombre real verificado por JWT
                 mapaUsuarios.put(session, nombreUsuario);
-                System.out.println("Sesión WebSocket autenticada en caliente: " + nombreUsuario + " (" + sessionIdActual + ")");
+                System.out.println("Sesión WebSocket AUTENTICADA con JWT con éxito: " + nombreUsuario + " (" + sessionIdActual + ")");
 
                 // El servidor genera el aviso de unión global
                 Map<String, String> avisoUnion = new ConcurrentHashMap<>();
@@ -97,7 +113,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             // --- CASO NORMAL: Flujo ordinario de chat ---
             String usuarioAutenticado = mapaUsuarios.get(session);
             if (usuarioAutenticado == null || usuarioAutenticado.startsWith("PENDIENTE_")) {
-                System.err.println("Mensaje rechazado: La sesión no ha completado el apretón de manos inicial.");
+                System.err.println("Mensaje rechazado: La sesión no ha completado la autenticación JWT inicial.");
                 return;
             }
 
