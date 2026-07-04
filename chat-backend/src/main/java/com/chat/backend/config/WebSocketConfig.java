@@ -20,9 +20,10 @@ public class WebSocketConfig implements WebSocketConfigurer {
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        registry.addHandler(chatWebSocketHandler, "/chat")
+
+        registry.addHandler(chatWebSocketHandler, "/chat", "/chat/")
                 .addInterceptors(webSocketAuthInterceptor)
-                .setHandshakeHandler(new DefaultHandshakeHandler()) // Fuerza la estrategia nativa de Handshake de Tomcat
+                .setHandshakeHandler(new DefaultHandshakeHandler())
                 .setAllowedOriginPatterns("*");
     }
 }
