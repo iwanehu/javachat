@@ -28,8 +28,22 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     private static final List<WebSocketSession> sesiones = new CopyOnWriteArrayList<>();
 
-    // Este mapa ahora vincula la sesión física con su HASH ÚNICO exclusivo
-    private static final Map<WebSocketSession, String> mapaUsuarios = new ConcurrentHashMap<>();
+    // --- NUEVA ESTRUCTURA INTERNA PARA GUARDAR AMBOS DATOS ---
+    public static class DatosUsuario {
+        private final String hash;
+        private final String username;
+
+        public DatosUsuario(String hash, String username) {
+            this.hash = hash;
+            this.username = username;
+        }
+
+        public String getHash() { return hash; }
+        public String getUsername() { return username; }
+    }
+
+    // --- CAMBIAMOS EL MAPA PARA QUE GUARDE NUESTRO OBJETO DatosUsuario ---
+    private static final Map<WebSocketSession, DatosUsuario> mapaUsuarios = new ConcurrentHashMap<>();
 
     @Autowired
     public ChatWebSocketHandler(MensajeRepository mensajeRepository, ObjectMapper objectMapper, JwtUtil jwtUtil) {
@@ -41,7 +55,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         sesiones.add(session);
-        mapaUsuarios.put(session, "PENDIENTE_" + session.getId());
+        // Inicializamos temporalmente con un hash pendiente y username vacío
+        mapaUsuarios.put(session, new DatosUsuario("PENDIENTE_" + session.getId(), ""));
     }
 
     @Override
@@ -49,7 +64,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         String payload = message.getPayload();
 
         try {
-            // Leemos como árbol genérico para no depender de la estructura estricta de una clase
             JsonNode jsonNode = objectMapper.readTree(payload);
 
             String contenido = jsonNode.has("contenido") ? jsonNode.get("contenido").asText() : null;
@@ -61,47 +75,51 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
                 if (token == null || token.isEmpty() || !jwtUtil.validarToken(token)) {
                     System.err.println("Token inválido en CONNECT_INIT.");
-                    session.close(CloseStatus.NOT_ACCEPTABLE); // Cierre controlado 406
+                    session.close(CloseStatus.NOT_ACCEPTABLE);
                     return;
                 }
 
                 String emailUsuario = jwtUtil.extraerUsername(token).trim();
                 String hashSesionUnico = "usr_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
 
-                mapaUsuarios.put(session, hashSesionUnico);
-                System.out.println("Usuario [" + emailUsuario + "] autenticado. Hash: " + hashSesionUnico);
+                // --- NUEVO: GUARDAMOS EL HASH Y EL USERNAME REAL ---
+                mapaUsuarios.put(session, new DatosUsuario(hashSesionUnico, remitente));
+                System.out.println("Usuario [" + emailUsuario + "] (" + remitente + ") autenticado. Hash: " + hashSesionUnico);
 
-                // Confirmación al cliente
+                // Confirmación al cliente (se queda igual)
                 Map<String, Object> respuestaConfirmacion = new ConcurrentHashMap<>();
                 respuestaConfirmacion.put("type", "INIT_SUCCESS");
                 respuestaConfirmacion.put("hashSesion", hashSesionUnico);
                 session.sendMessage(new TextMessage(objectMapper.writeValueAsString(respuestaConfirmacion)));
 
-                // Notificación al resto
+                // Notificación al resto usando el nombre real
                 Map<String, String> avisoUnion = new ConcurrentHashMap<>();
                 avisoUnion.put("remitente", "SISTEMA");
-                avisoUnion.put("contenido", "Un usuario se ha unido al chat.");
+                avisoUnion.put("contenido", remitente + " se ha unido al chat.");
                 retransmitirMensaje(new TextMessage(objectMapper.writeValueAsString(avisoUnion)));
 
                 enviarListaUsuariosActivos();
                 return;
             }
 
-            // --- MENSAJES ORDINARIOS ---
-            String hashRemitente = mapaUsuarios.get(session);
-            if (hashRemitente == null || hashRemitente.startsWith("PENDIENTE_")) {
+            DatosUsuario datosRemitente = mapaUsuarios.get(session);
+            if (datosRemitente == null || datosRemitente.getHash().startsWith("PENDIENTE_")) {
                 System.err.println("Mensaje bloqueado: Sesión no inicializada.");
                 return;
             }
 
-            // Para evitar que Jackson explote si el JSON trae el campo 'token' u otros extras,
-            // extraemos solo lo que necesitamos para construir el Mensaje de la BD
             Mensaje nuevoMensaje = new Mensaje();
-            nuevoMensaje.setRemitente(hashRemitente);
+            nuevoMensaje.setRemitente(datosRemitente.getHash());
             nuevoMensaje.setContenido(contenido);
             nuevoMensaje.setTimeStamp(LocalDateTime.now());
 
-            retransmitirMensaje(new TextMessage(objectMapper.writeValueAsString(nuevoMensaje)));
+            Map<String, Object> payloadMensaje = new ConcurrentHashMap<>();
+            payloadMensaje.put("remitente", datosRemitente.getHash());
+            payloadMensaje.put("username", datosRemitente.getUsername()); // <--- Nombre real adjunto
+            payloadMensaje.put("contenido", contenido);
+            payloadMensaje.put("timeStamp", nuevoMensaje.getTimeStamp().toString());
+
+            retransmitirMensaje(new TextMessage(objectMapper.writeValueAsString(payloadMensaje)));
 
             try {
                 mensajeRepository.save(nuevoMensaje);
@@ -110,7 +128,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             }
 
         } catch (Exception e) {
-            // Captura cualquier fallo de parseo para que NUNCA tire la conexión física
             System.err.println("Error crítico procesando JSON: " + e.getMessage());
             e.printStackTrace();
         }
@@ -119,13 +136,13 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         sesiones.remove(session);
-        String hashSaliente = mapaUsuarios.remove(session);
+        DatosUsuario datosSaliente = mapaUsuarios.remove(session);
 
-        if (hashSaliente != null && !hashSaliente.startsWith("PENDIENTE_")) {
+        if (datosSaliente != null && !datosSaliente.getHash().startsWith("PENDIENTE_")) {
             try {
                 Map<String, String> avisoSalida = new ConcurrentHashMap<>();
                 avisoSalida.put("remitente", "SISTEMA");
-                avisoSalida.put("contenido", "Un usuario ha abandonado el chat.");
+                avisoSalida.put("contenido", datosSaliente.getUsername() + " ha abandonado el chat.");
 
                 retransmitirMensaje(new TextMessage(objectMapper.writeValueAsString(avisoSalida)));
                 enviarListaUsuariosActivos();
@@ -147,12 +164,17 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         Map<String, Object> payloadLista = new ConcurrentHashMap<>();
         payloadLista.put("type", "LISTA_USUARIOS");
 
-        String[] listaHashes = mapaUsuarios.values().stream()
-                .filter(h -> !h.startsWith("PENDIENTE_"))
-                .distinct()
-                .toArray(String[]::new);
+        Object[] listaObjetosUsuarios = mapaUsuarios.values().stream()
+                .filter(du -> !du.getHash().startsWith("PENDIENTE_"))
+                .map(du -> {
+                    Map<String, String> uMap = new ConcurrentHashMap<>();
+                    uMap.put("hash", du.getHash());
+                    uMap.put("username", du.getUsername());
+                    return uMap;
+                })
+                .toArray();
 
-        payloadLista.put("usuarios", listaHashes);
+        payloadLista.put("usuarios", listaObjetosUsuarios);
         retransmitirMensaje(new TextMessage(objectMapper.writeValueAsString(payloadLista)));
     }
 }
