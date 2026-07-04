@@ -58,21 +58,24 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
             // --- CASO ESPECIAL: Inicialización de Handshake en diferido con validación JWT ---
             if ("CONNECT_INIT".equals(contenido) && remitente != null) {
-                String nombreUsuario = remitente.trim();
                 String sessionIdActual = session.getId();
 
                 // Extraemos el token del JSON enviado por el ChatRoom de React
                 String token = jsonNode.has("token") ? jsonNode.get("token").asText() : null;
 
-                System.out.println("Validando CONNECT_INIT mediante JWT para: " + nombreUsuario + " (Sesión: " + sessionIdActual + ")");
+                System.out.println("Procesando CONNECT_INIT en diferido (Sesión: " + sessionIdActual + ")");
 
-                // --- FILTRO DE SEGURIDAD JWT ---
-                if (token == null || token.isEmpty() || !jwtUtil.validarToken(token) || !nombreUsuario.equals(jwtUtil.extraerUsername(token))) {
-                    System.err.println("¡ALERTA DE SEGURIDAD! Intento de suplantación o token inválido para: " + nombreUsuario);
+                // --- FILTRO DE SEGURIDAD JWT OPTIMIZADO ---
+                if (token == null || token.isEmpty() || !jwtUtil.validarToken(token)) {
+                    System.err.println("¡ALERTA DE SEGURIDAD! Intento de conexión rechazado: Token ausente o inválido.");
                     // Tumbamos la sesión tcp provisional por falta de credenciales legítimas
                     session.close(CloseStatus.NOT_ACCEPTABLE);
                     return;
                 }
+
+                // Extraemos el identificador real directamente del JWT validado (evitamos conflictos alias vs email)
+                String nombreUsuario = jwtUtil.extraerUsername(token).trim();
+                System.out.println("Validación JWT exitosa. Registrando usuario oficial: " + nombreUsuario);
 
                 // LIMPIEZA MUTEX: Cerramos SOLO sesiones antiguas reales de ese usuario, protegiendo la sesión actual
                 mapaUsuarios.entrySet().removeIf(entry -> {
