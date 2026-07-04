@@ -24,6 +24,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
         registry.addHandler(chatWebSocketHandler, "/")
                 .addInterceptors(webSocketAuthInterceptor)
                 .setHandshakeHandler(new DefaultHandshakeHandler())
+                .setAllowedOrigins("*")
                 .setAllowedOriginPatterns("*");
     }
 }
