@@ -2,6 +2,7 @@ package com.chat.backend.handler;
 
 import com.chat.backend.model.Mensaje;
 import com.chat.backend.repository.MensajeRepository;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -45,29 +46,42 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         String payload = message.getPayload();
 
         try {
-            // Mapeamos el payload a un mapa genérico para verificar si es el mensaje de inicialización
-            Map<String, String> datosMensaje = objectMapper.readValue(payload, Map.class);
-            String contenido = datosMensaje.get("contenido");
-            String remitente = datosMensaje.get("remitente");
+            // Leemos como JsonNode para evitar problemas de casteo genérico con Map.class
+            JsonNode jsonNode = objectMapper.readTree(payload);
+            String contenido = jsonNode.has("contenido") ? jsonNode.get("contenido").asText() : null;
+            String remitente = jsonNode.has("remitente") ? jsonNode.get("remitente").asText() : null;
 
             // --- CASO ESPECIAL: Inicialización de Handshake en diferido ---
             if ("CONNECT_INIT".equals(contenido) && remitente != null) {
                 String nombreUsuario = remitente.trim();
+                String sessionIdActual = session.getId();
 
-                // LIMPIEZA SEGURA: Eliminamos sesiones previas del mismo usuario si existieran
-                mapaUsuarios.forEach((sesionVieja, usuario) -> {
-                    if (usuario.equals(nombreUsuario)) {
+                System.out.println("Procesando CONNECT_INIT para: " + nombreUsuario + " (Sesión: " + sessionIdActual + ")");
+
+                // LIMPIEZA MUTEX: Cerramos SOLO sesiones antiguas reales de ese usuario, protegiendo la sesión actual
+                mapaUsuarios.entrySet().removeIf(entry -> {
+                    WebSocketSession sesionVieja = entry.getKey();
+                    String usuarioAsociado = entry.getValue();
+
+                    // Si es el mismo nombre de usuario pero una conexión física DISTINTA, la purgamos
+                    if (usuarioAsociado.equals(nombreUsuario) && !sesionVieja.getId().equals(sessionIdActual)) {
                         sesiones.remove(sesionVieja);
                         if (sesionVieja.isOpen()) {
-                            try { sesionVieja.close(); } catch (Exception e) {}
+                            try {
+                                sesionVieja.close(CloseStatus.SESSION_NOT_RELIABLE);
+                                System.out.println("-> Sesión antigua duplicada cerrada para el usuario: " + nombreUsuario);
+                            } catch (Exception e) {
+                                System.err.println("Error al cerrar sesión duplicada: " + e.getMessage());
+                            }
                         }
+                        return true; // Elimina del mapaUsuarios de forma segura
                     }
+                    return false;
                 });
-                mapaUsuarios.values().removeIf(usuario -> usuario.equals(nombreUsuario));
 
-                // Registramos al usuario con su nombre real verificado por el cliente
+                // Registramos de forma segura al usuario actual con su nombre real verificado
                 mapaUsuarios.put(session, nombreUsuario);
-                System.out.println("Sesión WebSocket autenticada en caliente: " + nombreUsuario + " (" + session.getId() + ")");
+                System.out.println("Sesión WebSocket autenticada en caliente: " + nombreUsuario + " (" + sessionIdActual + ")");
 
                 // El servidor genera el aviso de unión global
                 Map<String, String> avisoUnion = new ConcurrentHashMap<>();
@@ -77,7 +91,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
                 retransmitirMensaje(new TextMessage(jsonUnion));
                 enviarListaUsuariosActivos();
-                return; // Cortamos la ejecución aquí, no necesitamos persistir este mensaje de control
+                return; // Cortamos la ejecución, mensaje de control procesado con éxito
             }
 
             // --- CASO NORMAL: Flujo ordinario de chat ---
