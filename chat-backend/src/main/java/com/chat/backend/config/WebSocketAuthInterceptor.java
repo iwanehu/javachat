@@ -8,8 +8,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.HandshakeInterceptor;
 
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 
 @Component
@@ -22,27 +21,28 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                    WebSocketHandler wsHandler, Map<String, Object> attributes) throws Exception {
         try {
-            // Permitir explícitamente las peticiones OPTIONS previas que a veces inyectan los proxies
             if (request.getMethod().name().equalsIgnoreCase("OPTIONS")) {
                 return true;
             }
 
-            String query = request.getURI().getQuery();
+            // Recuperamos el token desde las cabeceras de subprotocolo WebSocket
+            List<String> protocols = request.getHeaders().get("Sec-WebSocket-Protocol");
             String token = null;
 
-            if (query != null && query.contains("token=")) {
-                token = query.split("token=")[1].split("&")[0];
-                token = URLDecoder.decode(token, StandardCharsets.UTF_8);
+            if (protocols != null && !protocols.isEmpty()) {
+                // El navegador envía los protocolos separados por comas; tomamos el primero que será nuestro token
+                token = protocols.get(0).split(",")[0].trim();
+                // Devolvemos el mismo protocolo en la respuesta para validar el handshake en el cliente
+                response.getHeaders().set("Sec-WebSocket-Protocol", token);
             }
 
-            if (token != null && !token.trim().isEmpty()) {
+            if (token != null && !token.isEmpty()) {
                 String username;
-
                 if (token.contains(".")) {
                     if (jwtUtil.validarToken(token)) {
                         username = jwtUtil.extraerUsername(token);
                     } else {
-                        System.out.println("WS Rechazado: Token JWT inválido.");
+                        System.out.println("WS Rechazado: JWT Inválido.");
                         return false;
                     }
                 } else {
@@ -50,18 +50,15 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
                 }
 
                 attributes.put("username", username);
-                System.out.println("Handshake verificado para: " + username);
                 return true;
             }
 
-            System.out.println("Advertencia: No se detectó token en query string. Forzando paso de handshake.");
-            attributes.put("username", "Usuario_Render");
-            return true;
+            System.out.println("WS Rechazado: No se encontró token en Sec-WebSocket-Protocol.");
+            return false;
 
         } catch (Exception e) {
-            System.err.println("Error procesando handshake: " + e.getMessage());
+            System.err.println("Error procesando handshake en Render: " + e.getMessage());
         }
-
         return false;
     }
 
