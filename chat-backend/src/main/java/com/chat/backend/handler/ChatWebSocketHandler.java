@@ -21,21 +21,23 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class ChatWebSocketHandler extends TextWebSocketHandler {
 
-    @Autowired
-    private MensajeRepository mensajeRepository;
-
-    @Autowired
-    private ObjectMapper objectMapper;
-
-    // Inyectamos el componente de seguridad para la validación en caliente
-    @Autowired
-    private JwtUtil jwtUtil;
+    private final MensajeRepository mensajeRepository;
+    private final ObjectMapper objectMapper;
+    private final JwtUtil jwtUtil;
 
     // Lista de sesiones activas globales
     private static final List<WebSocketSession> sesiones = new CopyOnWriteArrayList<>();
 
     // Mapa concurrente para rastrear el nombre de usuario de cada sesión activa
     private static final Map<WebSocketSession, String> mapaUsuarios = new ConcurrentHashMap<>();
+
+    // Única inyección robusta por constructor para evitar NullPointerExceptions
+    @Autowired
+    public ChatWebSocketHandler(MensajeRepository mensajeRepository, ObjectMapper objectMapper, JwtUtil jwtUtil) {
+        this.mensajeRepository = mensajeRepository;
+        this.objectMapper = objectMapper;
+        this.jwtUtil = jwtUtil;
+    }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
@@ -60,14 +62,22 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             if ("CONNECT_INIT".equals(contenido) && remitente != null) {
                 String sessionIdActual = session.getId();
 
+                System.out.println("Procesando CONNECT_INIT en diferido (Sesión: " + sessionIdActual + ")");
+                System.out.println("Payload crudo recibido: " + payload);
+
                 // Extraemos el token del JSON enviado por el ChatRoom de React
                 String token = jsonNode.has("token") ? jsonNode.get("token").asText() : null;
 
-                System.out.println("Procesando CONNECT_INIT en diferido (Sesión: " + sessionIdActual + ")");
+                if (jwtUtil == null) {
+                    System.err.println("CRÍTICO: ¡jwtUtil sigue siendo NULL! Fallo de inyección en el framework.");
+                    session.close(CloseStatus.SERVER_ERROR);
+                    return;
+                }
 
-                // --- FILTRO DE SEGURIDAD JWT OPTIMIZADO ---
+                // --- FILTRO DE SEGURIDAD JWT BLINDADO ---
                 if (token == null || token.isEmpty() || !jwtUtil.validarToken(token)) {
-                    System.err.println("¡ALERTA DE SEGURIDAD! Intento de conexión rechazado: Token ausente o inválido.");
+                    System.err.println("¡ALERTA DE SEGURIDAD! Intento de conexión rechazado: Token ausente, vacío o inválido.");
+                    System.err.println("Valor del token inspeccionado: " + (token != null ? "Presente (Tam: " + token.length() + ")" : "null"));
                     // Tumbamos la sesión tcp provisional por falta de credenciales legítimas
                     session.close(CloseStatus.NOT_ACCEPTABLE);
                     return;
