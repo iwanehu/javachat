@@ -17,12 +17,14 @@ public class Mensaje {
     @Id
     private String id;
     private String remitente;
+    private String username;
     private String destinatario;
     private String contenido;
     private LocalDateTime timeStamp;
 
-    public Mensaje(String remitente, String destinatario, String contenido) {
+    public Mensaje(String remitente,String username, String destinatario, String contenido) {
         this.remitente = remitente;
+        this.username = username;
         this.destinatario = destinatario;
         this.contenido = contenido;
         this.timeStamp = LocalDateTime.now();

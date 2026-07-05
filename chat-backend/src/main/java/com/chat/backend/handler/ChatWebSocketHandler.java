@@ -137,6 +137,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         // Guardar mensaje en MongoDB
         Mensaje nuevoMensaje = new Mensaje();
         nuevoMensaje.setRemitente(datosRemitente.getHash());
+        nuevoMensaje.setUsername(datosRemitente.getUsername());
         nuevoMensaje.setDestinatario("TODOS");
         nuevoMensaje.setContenido(contenido);
         nuevoMensaje.setTimeStamp(LocalDateTime.now());
@@ -155,6 +156,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         // Guardar en BD
         try {
             mensajeRepository.save(nuevoMensaje);
+            System.out.println("💾 Mensaje guardado: " + datosRemitente.getUsername() + ": " + contenido);
         } catch (Exception mongoEx) {
             logger.error("Error guardando en MongoDB: {}", mongoEx.getMessage(), mongoEx);
         }
