@@ -200,6 +200,8 @@ services:
 
 📊 Arquitectura del Sistema
 
+```bash
+
 ┌─────────────────────────────────────────────────────────────┐
 │                          Cliente                            │
 │                    (React + TypeScript)                     │
@@ -229,6 +231,8 @@ services:
 │                      MongoDB Atlas                          │
 │                  (Base de datos en la nube)                 │
 └─────────────────────────────────────────────────────────────┘
+
+```
 
 
 🔐 Seguridad
