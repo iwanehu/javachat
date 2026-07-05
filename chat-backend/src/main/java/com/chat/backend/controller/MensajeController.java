@@ -3,6 +3,9 @@ package com.chat.backend.controller;
 import com.chat.backend.model.Mensaje;
 import com.chat.backend.repository.MensajeRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
@@ -17,25 +20,36 @@ public class MensajeController {
     @Autowired
     private MensajeRepository mensajeRepository;
 
-    // Obtener mensajes públicos (destinatario = "TODOS")
+    @Autowired
+    private MongoTemplate mongoTemplate;
+
     @GetMapping("/publicos")
     public List<Mensaje> obtenerMensajesPublico() {
         try {
-            return mensajeRepository.findByDestinatarioOrderByTimeStampAsc("TODOS");
+            System.out.println("📡 Obteniendo mensajes públicos...");
+            Query query = new Query();
+            query.with(Sort.by(Sort.Direction.ASC, "timeStamp"));
+            List<Mensaje> mensajes = mongoTemplate.find(query, Mensaje.class);
+            System.out.println("📜 Mensajes públicos encontrados: " + mensajes.size());
+            return mensajes;
         } catch (Exception e) {
-            System.err.println("Error obteniendo mensajes públicos: " + e.getMessage());
+            System.err.println("❌ Error obteniendo mensajes públicos: " + e.getMessage());
+            e.printStackTrace();
             return Collections.emptyList();
         }
     }
 
-    // Obtener historial general (últimos 30 mensajes)
     @GetMapping("/historial")
     public List<Mensaje> obtenerHistorial(@RequestParam(defaultValue = "30") int limite) {
         try {
             System.out.println("📡 Solicitando historial con límite: " + limite);
 
-            // Obtener los últimos mensajes de TODOS los destinatarios
-            List<Mensaje> mensajes = mensajeRepository.findTop30ByOrderByTimeStampDesc();
+            // Usar MongoTemplate directamente con consulta simple
+            Query query = new Query();
+            query.with(Sort.by(Sort.Direction.DESC, "timeStamp"));
+            query.limit(limite);
+
+            List<Mensaje> mensajes = mongoTemplate.find(query, Mensaje.class);
 
             if (mensajes == null || mensajes.isEmpty()) {
                 System.out.println("📭 No hay mensajes en la base de datos");
@@ -46,6 +60,11 @@ public class MensajeController {
             Collections.reverse(mensajes);
             System.out.println("📜 Historial encontrado: " + mensajes.size() + " mensajes");
 
+            // Log de los primeros 3 mensajes para debug
+            for (int i = 0; i < Math.min(3, mensajes.size()); i++) {
+                System.out.println("  - " + mensajes.get(i).getRemitente() + ": " + mensajes.get(i).getContenido());
+            }
+
             return mensajes;
         } catch (Exception e) {
             System.err.println("❌ Error obteniendo historial: " + e.getMessage());
@@ -54,41 +73,17 @@ public class MensajeController {
         }
     }
 
-    // Obtener historial de un destinatario específico
-    @GetMapping("/historial/destinatario/{destinatario}")
-    public List<Mensaje> obtenerHistorialPorDestinatario(
-            @PathVariable String destinatario,
-            @RequestParam(defaultValue = "30") int limite) {
-        try {
-            System.out.println("📡 Solicitando historial para destinatario: " + destinatario);
-
-            List<Mensaje> mensajes = mensajeRepository.findTop30ByDestinatarioOrderByTimeStampDesc(destinatario);
-
-            if (mensajes == null || mensajes.isEmpty()) {
-                System.out.println("📭 No hay mensajes para el destinatario: " + destinatario);
-                return Collections.emptyList();
-            }
-
-            Collections.reverse(mensajes);
-            System.out.println("📜 Historial destinatario encontrado: " + mensajes.size() + " mensajes");
-
-            return mensajes;
-        } catch (Exception e) {
-            System.err.println("❌ Error obteniendo historial por destinatario: " + e.getMessage());
-            e.printStackTrace();
-            return Collections.emptyList();
-        }
-    }
-
-    // Obtener historial de un usuario específico (por remitente)
     @GetMapping("/historial/usuario/{hash}")
-    public List<Mensaje> obtenerHistorialPorUsuario(
-            @PathVariable String hash,
-            @RequestParam(defaultValue = "30") int limite) {
+    public List<Mensaje> obtenerHistorialPorUsuario(@PathVariable String hash, @RequestParam(defaultValue = "30") int limite) {
         try {
             System.out.println("📡 Solicitando historial para usuario: " + hash);
 
-            List<Mensaje> mensajes = mensajeRepository.findTop30ByRemitenteOrderByTimeStampDesc(hash);
+            Query query = new Query();
+            query.addCriteria(org.springframework.data.mongodb.core.query.Criteria.where("remitente").is(hash));
+            query.with(Sort.by(Sort.Direction.DESC, "timeStamp"));
+            query.limit(limite);
+
+            List<Mensaje> mensajes = mongoTemplate.find(query, Mensaje.class);
 
             if (mensajes == null || mensajes.isEmpty()) {
                 System.out.println("📭 No hay mensajes para el usuario: " + hash);
@@ -106,19 +101,32 @@ public class MensajeController {
         }
     }
 
-    // Contar mensajes totales
     @GetMapping("/count")
     public String contarMensajes() {
         try {
-            long total = mensajeRepository.count();
-            long publicos = mensajeRepository.countByDestinatario("TODOS");
-            return "Total: " + total + " | Públicos: " + publicos;
+            long count = mensajeRepository.count();
+            System.out.println("📊 Total de mensajes en MongoDB: " + count);
+            return "Total de mensajes en MongoDB: " + count;
         } catch (Exception e) {
+            System.err.println("❌ Error contando mensajes: " + e.getMessage());
             return "Error: " + e.getMessage();
         }
     }
 
-    // Guardar un mensaje
+    @GetMapping("/test")
+    public String testConexion() {
+        try {
+            System.out.println("🔄 Probando conexión a MongoDB...");
+            long count = mensajeRepository.count();
+            System.out.println("✅ Conexión exitosa. Mensajes: " + count);
+            return "✅ MongoDB conectado correctamente. Mensajes: " + count;
+        } catch (Exception e) {
+            System.err.println("❌ Error de conexión: " + e.getMessage());
+            e.printStackTrace();
+            return "❌ Error: " + e.getMessage();
+        }
+    }
+
     @PostMapping("/guardar")
     public Mensaje guardarMensaje(@RequestBody Mensaje mensaje) {
         try {
@@ -134,7 +142,10 @@ public class MensajeController {
             System.out.println("  - Destinatario: " + mensaje.getDestinatario());
             System.out.println("  - Contenido: " + mensaje.getContenido());
 
-            return mensajeRepository.save(mensaje);
+            Mensaje saved = mensajeRepository.save(mensaje);
+            System.out.println("✅ Mensaje guardado con ID: " + saved.getId());
+
+            return saved;
         } catch (Exception e) {
             System.err.println("❌ Error guardando mensaje: " + e.getMessage());
             e.printStackTrace();
@@ -142,19 +153,31 @@ public class MensajeController {
         }
     }
 
-    // Endpoint para crear mensajes de prueba
     @PostMapping("/crear-prueba")
     public String crearMensajePrueba() {
         try {
-            Mensaje msg1 = new Mensaje("SISTEMA", "TODOS", "Mensaje de prueba 1 - Chat iniciado");
+            System.out.println("🔄 Creando mensaje de prueba...");
+
+            Mensaje msg1 = new Mensaje();
+            msg1.setRemitente("SISTEMA");
+            msg1.setDestinatario("TODOS");
+            msg1.setContenido("📢 Mensaje de prueba 1 - Chat iniciado");
+            msg1.setTimeStamp(LocalDateTime.now());
             mensajeRepository.save(msg1);
 
-            Mensaje msg2 = new Mensaje("usr_test", "TODOS", "Mensaje de prueba 2 - Hola mundo");
+            Mensaje msg2 = new Mensaje();
+            msg2.setRemitente("usr_test");
+            msg2.setDestinatario("TODOS");
+            msg2.setContenido("👋 Mensaje de prueba 2 - Hola mundo");
+            msg2.setTimeStamp(LocalDateTime.now());
             mensajeRepository.save(msg2);
 
-            return "Mensajes de prueba creados correctamente";
+            System.out.println("✅ Mensajes de prueba creados");
+            return "✅ Mensajes de prueba creados correctamente";
         } catch (Exception e) {
-            return "Error: " + e.getMessage();
+            System.err.println("❌ Error creando mensajes de prueba: " + e.getMessage());
+            e.printStackTrace();
+            return "❌ Error: " + e.getMessage();
         }
     }
 }

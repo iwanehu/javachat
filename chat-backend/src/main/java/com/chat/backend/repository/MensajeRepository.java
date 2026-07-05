@@ -8,11 +8,4 @@ import java.util.List;
 
 public interface MensajeRepository extends MongoRepository<Mensaje, String> {
 
-    List<Mensaje> findByDestinatarioOrderByTimeStampAsc(String destinatario);
-
-    // Método para obtener los últimos mensajes
-    List<Mensaje> findTop30ByOrderByTimeStampDesc();
-
-    // Método para obtener mensajes por remitente
-    List<Mensaje> findTop30ByRemitenteOrderByTimeStampDesc(String remitente);
 }
