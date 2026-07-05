@@ -13,7 +13,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/mensajes")
-@CrossOrigin(origins = "*", allowedHeaders = "*", methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.OPTIONS})
+@CrossOrigin(origins = "*", allowedHeaders = "*")
 public class MensajeController {
 
     @Autowired
@@ -23,54 +23,67 @@ public class MensajeController {
     private MongoTemplate mongoTemplate;
 
     @GetMapping("/publicos")
-    @CrossOrigin(origins = "*")
     public List<Mensaje> obtenerMensajesPublico() {
         return mensajeRepository.findByDestinatarioOrderByTimeStampAsc("TODOS");
     }
 
     @GetMapping("/historial")
-    @CrossOrigin(origins = "*")
     public List<Mensaje> obtenerHistorial(@RequestParam(defaultValue = "30") int limite) {
         try {
-            // Obtener los últimos 'limite' mensajes ordenados por timestamp descendente
-            Query query = new Query();
-            query.with(Sort.by(Sort.Direction.DESC, "timeStamp"));
-            query.limit(limite);
+            System.out.println("📡 Solicitando historial con límite: " + limite);
 
-            List<Mensaje> mensajes = mongoTemplate.find(query, Mensaje.class);
+            // Usar el repositorio directamente
+            List<Mensaje> mensajes = mensajeRepository.findTop30ByOrderByTimeStampDesc();
+
+            if (mensajes == null || mensajes.isEmpty()) {
+                System.out.println("📭 No hay mensajes en la base de datos");
+                return Collections.emptyList();
+            }
 
             // Revertir el orden para mostrar del más antiguo al más nuevo
             Collections.reverse(mensajes);
+            System.out.println("📜 Historial encontrado: " + mensajes.size() + " mensajes");
 
             return mensajes;
         } catch (Exception e) {
-            System.err.println("Error obteniendo historial: " + e.getMessage());
+            System.err.println("❌ Error obteniendo historial: " + e.getMessage());
+            e.printStackTrace();
             return Collections.emptyList();
         }
     }
 
     @GetMapping("/historial/usuario/{hash}")
-    @CrossOrigin(origins = "*")
     public List<Mensaje> obtenerHistorialPorUsuario(@PathVariable String hash, @RequestParam(defaultValue = "30") int limite) {
         try {
-            Query query = new Query();
-            query.addCriteria(org.springframework.data.mongodb.core.query.Criteria.where("remitente").is(hash));
-            query.with(Sort.by(Sort.Direction.DESC, "timeStamp"));
-            query.limit(limite);
+            System.out.println("📡 Solicitando historial para usuario: " + hash);
 
-            List<Mensaje> mensajes = mongoTemplate.find(query, Mensaje.class);
+            List<Mensaje> mensajes = mensajeRepository.findTop30ByRemitenteOrderByTimeStampDesc(hash);
+
+            if (mensajes == null || mensajes.isEmpty()) {
+                System.out.println("📭 No hay mensajes para el usuario: " + hash);
+                return Collections.emptyList();
+            }
+
             Collections.reverse(mensajes);
+            System.out.println("📜 Historial usuario encontrado: " + mensajes.size() + " mensajes");
 
             return mensajes;
         } catch (Exception e) {
-            System.err.println("Error obteniendo historial por usuario: " + e.getMessage());
+            System.err.println("❌ Error obteniendo historial por usuario: " + e.getMessage());
+            e.printStackTrace();
             return Collections.emptyList();
         }
     }
 
     @PostMapping("/guardar")
-    @CrossOrigin(origins = "*")
     public Mensaje guardarMensaje(@RequestBody Mensaje mensaje) {
-        return mensajeRepository.save(mensaje);
+        try {
+            System.out.println("💾 Guardando mensaje: " + mensaje.getContenido());
+            return mensajeRepository.save(mensaje);
+        } catch (Exception e) {
+            System.err.println("❌ Error guardando mensaje: " + e.getMessage());
+            e.printStackTrace();
+            return null;
+        }
     }
 }
