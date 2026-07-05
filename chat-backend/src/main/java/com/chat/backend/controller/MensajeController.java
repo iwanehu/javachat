@@ -40,11 +40,11 @@ public class MensajeController {
     }
 
     @GetMapping("/historial")
-    public List<Mensaje> obtenerHistorial(@RequestParam(defaultValue = "30") int limite) {
+    public List<Mensaje> obtenerHistorial(
+            @RequestParam(name = "limite", defaultValue = "30") int limite) {
         try {
             System.out.println("📡 Solicitando historial con límite: " + limite);
 
-            // Usar MongoTemplate directamente con consulta simple
             Query query = new Query();
             query.with(Sort.by(Sort.Direction.DESC, "timeStamp"));
             query.limit(limite);
@@ -56,14 +56,8 @@ public class MensajeController {
                 return Collections.emptyList();
             }
 
-            // Revertir para mostrar del más antiguo al más nuevo
             Collections.reverse(mensajes);
             System.out.println("📜 Historial encontrado: " + mensajes.size() + " mensajes");
-
-            // Log de los primeros 3 mensajes para debug
-            for (int i = 0; i < Math.min(3, mensajes.size()); i++) {
-                System.out.println("  - " + mensajes.get(i).getRemitente() + ": " + mensajes.get(i).getContenido());
-            }
 
             return mensajes;
         } catch (Exception e) {
@@ -74,7 +68,9 @@ public class MensajeController {
     }
 
     @GetMapping("/historial/usuario/{hash}")
-    public List<Mensaje> obtenerHistorialPorUsuario(@PathVariable String hash, @RequestParam(defaultValue = "30") int limite) {
+    public List<Mensaje> obtenerHistorialPorUsuario(
+            @PathVariable String hash,
+            @RequestParam(name = "limite", defaultValue = "30") int limite) {
         try {
             System.out.println("📡 Solicitando historial para usuario: " + hash);
 
@@ -124,6 +120,18 @@ public class MensajeController {
             System.err.println("❌ Error de conexión: " + e.getMessage());
             e.printStackTrace();
             return "❌ Error: " + e.getMessage();
+        }
+    }
+
+    @GetMapping("/historial-simple")
+    public List<Mensaje> obtenerHistorialSimple() {
+        try {
+            System.out.println("📡 Solicitando historial simple...");
+            return mongoTemplate.findAll(Mensaje.class);
+        } catch (Exception e) {
+            System.err.println("❌ Error en historial simple: " + e.getMessage());
+            e.printStackTrace();
+            return Collections.emptyList();
         }
     }
 
