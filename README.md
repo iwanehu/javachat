@@ -63,7 +63,6 @@ javachat-backend/
 │ └── application.properties # Configuración de la app
 ├── pom.xml # Dependencias Maven
 └── Dockerfile # Configuración Docker
-
 ```
 
 
