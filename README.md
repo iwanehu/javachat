@@ -38,6 +38,8 @@ API REST y WebSocket para el chat en tiempo real Javachat. Backend desarrollado 
 | MongoDB Atlas | - | Base de datos en la nube |
 
 ## 📁 Estructura del Proyecto
+
+```bash
 javachat-backend/
 ├── src/main/java/com/chat/backend/
 │ ├── config/
@@ -61,6 +63,8 @@ javachat-backend/
 │ └── application.properties # Configuración de la app
 ├── pom.xml # Dependencias Maven
 └── Dockerfile # Configuración Docker
+
+```
 
 
 ## 🚀 Instalación y Ejecución
